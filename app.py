@@ -15,8 +15,10 @@ from langchain_community.vectorstores import FAISS
 from langchain.schema import Document
 from langchain_openai import AzureChatOpenAI, AzureOpenAIEmbeddings
 from langchain.schema import SystemMessage, HumanMessage
+from google.generativeai import configure, GenerativeModel, upload_file
 
 load_dotenv()
+configure(api_key=os.getenv("GEMINI_API_KEY"))
 
 def get_azure_embeddings():
     """
@@ -105,6 +107,55 @@ async def generate_llm_answer_langchain(context, user_query, stream_message=None
         # Non-streaming response
         response = llm.invoke([system, user])
         return response.content.strip()
+
+async def handle_pdf_upload(file_element):
+    """
+    Handle PDF file uploads
+    """
+    global faiss_db
+    
+    try:
+        # Extract text from PDF
+        extracted_text = extract_text_from_pdf(file_element.path)
+                
+        # Chunk the text
+        chunks = chunk_text(extracted_text)
+        
+        # Create embeddings and FAISS index
+        embedding_fn = get_azure_embeddings()
+        documents = [Document(page_content=chunk) for chunk in chunks]
+        
+        faiss_db = FAISS.from_documents(
+            documents=documents,
+            embedding=embedding_fn
+        )
+        
+        # Save the index
+        faiss_db.save_local("my_faiss_index")
+        
+        await cl.Message(
+            content=f"You can now ask questions about the document.",
+            author="System"
+        ).send()
+        
+    except Exception as e:
+        await cl.Message(
+            content=f"❌ Error processing file: {str(e)}",
+            author="System"
+        ).send() 
+
+def transcribe_audio_with_gemini(audio_file_path):
+    # Upload the file
+    file = upload_file(audio_file_path)
+    # Create model (gemini-1.5-* currently supports audio input)
+    model = GenerativeModel(model_name="models/gemini-2.5-flash")
+    # Generate content with audio file
+    response = model.generate_content([
+        "Give me the transcription of this audio clip.",
+        file
+    ])
+    # Return the transcription
+    return response.text
 
 # Global variable to store the FAISS index
 faiss_db = None
@@ -195,41 +246,7 @@ async def main(message: cl.Message):
             author="System"
         ).send()
 
-async def handle_pdf_upload(file_element):
-    """
-    Handle PDF file uploads
-    """
-    global faiss_db
-    
-    try:
-        # Extract text from PDF
-        extracted_text = extract_text_from_pdf(file_element.path)
-                
-        # Chunk the text
-        chunks = chunk_text(extracted_text)
-        
-        # Create embeddings and FAISS index
-        embedding_fn = get_azure_embeddings()
-        documents = [Document(page_content=chunk) for chunk in chunks]
-        
-        faiss_db = FAISS.from_documents(
-            documents=documents,
-            embedding=embedding_fn
-        )
-        
-        # Save the index
-        faiss_db.save_local("my_faiss_index")
-        
-        await cl.Message(
-            content=f"You can now ask questions about the document.",
-            author="System"
-        ).send()
-        
-    except Exception as e:
-        await cl.Message(
-            content=f"❌ Error processing file: {str(e)}",
-            author="System"
-        ).send() 
+
 
 # if __name__ == "__main__":
 #     pdf_path = "Resume - Lucius Wilbert Tjoa.pdf"  
